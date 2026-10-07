@@ -215,15 +215,21 @@ class BrowserJourneyTests(unittest.TestCase):
 
         # Verify a real server-signed report, then prove a modified score is rejected.
         self.page.get_by_role("button", name="Verify signature").click()
-        self.page.get_by_text("Signature verified · Report signature verified with the local Agent Signal signing key.", exact=False).wait_for()
+        self.page.wait_for_function(
+            "() => document.querySelector('#verification-result').textContent.trim().startsWith('Signature verified')"
+        )
         tampered_report = json.loads(self.page.locator("#report-input").input_value())
         tampered_report["report"]["overall_score"] = 94
         self.page.locator("#report-input").fill(json.dumps(tampered_report))
         self.page.get_by_role("button", name="Verify report").click()
-        self.page.get_by_text("Signature invalid", exact=False).wait_for()
+        self.page.wait_for_function(
+            "() => document.querySelector('#verification-result').textContent.trim().startsWith('Signature invalid')"
+        )
         self.page.locator("#report-input").fill(json.dumps(signed_report))
         self.page.get_by_role("button", name="Verify report").click()
-        self.page.get_by_text("Signature verified", exact=False).wait_for()
+        self.page.wait_for_function(
+            "() => document.querySelector('#verification-result').textContent.trim().startsWith('Signature verified')"
+        )
 
         self.page.on("dialog", lambda dialog: dialog.accept())
         self.page.get_by_role("button", name="Rotate and revoke old key").click()
