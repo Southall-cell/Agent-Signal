@@ -37,6 +37,7 @@ jobs:
           export REGISTRATION_TOKEN="$(sed -n 's/^REGISTRATION_TOKEN=//p' .dev/registration.env)"
           export AGENT_PUBLIC_KEYS_FILE="$PWD/.dev/agent_public_keys.json"
           export AGENTS_DB_FILE="$PWD/.dev/agents.sqlite3"
+          export REPORT_SIGNING_PRIVATE_KEY_FILE="$PWD/.dev/report-signing-key.pem"
           server_log="$PWD/.dev/ci-server.log"
           python -m uvicorn app:app --host 127.0.0.1 --port 8765 >"$server_log" 2>&1 &
           api_pid=$!

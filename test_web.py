@@ -15,7 +15,9 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("Agent Signal", response.text)
         self.assertIn('id="run-assessment"', response.text)
-        self.assertIn("requester supplied", response.text)
+        self.assertIn("Registered agents", response.text)
+        self.assertIn("Verify a report signature", response.text)
+        self.assertIn("The private key stays in this browser", response.text)
         self.assertEqual(response.headers["cache-control"], "no-store")
         self.assertIn("default-src 'self'", response.headers["content-security-policy"])
         self.assertEqual(response.headers["x-content-type-options"], "nosniff")
@@ -32,8 +34,9 @@ class DashboardTests(unittest.TestCase):
     def test_browser_flow_uses_existing_api_and_does_not_persist_secrets(self):
         script = self.client.get("/assets/dashboard.js").text
         for required in (
-            "/v1/agents/register", "/v1/identity/challenge", "/v1/identity/verify",
-            "/v1/score", "/v1/score/report", "/v1/agents/rotate-key",
+            "/v1/agents", "/v1/agents/register", "/v1/identity/challenge", "/v1/identity/verify",
+            "/v1/score", "/v1/score/report/signed", "/v1/reports/verify",
+            "/v1/agents/rotate-key",
             "subtle.importKey", "subtle.sign", "Requester supplied",
         ):
             with self.subTest(required=required):
@@ -51,7 +54,8 @@ class DashboardTests(unittest.TestCase):
         self.assertNotIn("https://", script)
         self.assertNotIn("https://", styles)
         self.assertNotIn("@import", styles)
-        self.assertIn("[hidden]{display:none!important}", styles)
+        self.assertIn("[hidden]", styles)
+        self.assertIn("display: none !important", styles)
 
     def test_unknown_dashboard_asset_returns_safe_api_error(self):
         response = self.client.get("/assets/agent_public_keys.json")

@@ -5,6 +5,7 @@ DEV_DIR="$ROOT_DIR/.dev"
 KEY_FILE="$DEV_DIR/demo-agent.pem"
 REGISTRY_FILE="$DEV_DIR/agent_public_keys.json"
 REGISTRATION_ENV="$DEV_DIR/registration.env"
+REPORT_SIGNING_KEY="$DEV_DIR/report-signing-key.pem"
 mkdir -p "$DEV_DIR"
 chmod 700 "$DEV_DIR"
 if [ ! -e "$DEV_DIR/agents.sqlite3" ]; then
@@ -16,6 +17,11 @@ if [ ! -f "$REGISTRATION_ENV" ]; then
     (umask 077 && "$PYTHON_BIN" -c 'import secrets; print("REGISTRATION_TOKEN=" + secrets.token_urlsafe(32))' > "$REGISTRATION_ENV")
 fi
 chmod 600 "$REGISTRATION_ENV"
+
+if [ ! -f "$REPORT_SIGNING_KEY" ]; then
+    "$PYTHON_BIN" "$ROOT_DIR/generate_report_signing_key.py" "$REPORT_SIGNING_KEY"
+fi
+chmod 600 "$REPORT_SIGNING_KEY"
 
 if [ -f "$KEY_FILE" ] && [ -f "$REGISTRY_FILE" ]; then
     exit 0

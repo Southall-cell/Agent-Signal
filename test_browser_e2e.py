@@ -68,6 +68,14 @@ class BrowserJourneyTests(unittest.TestCase):
             self.agent_id: base64.b64encode(public_bytes).decode("ascii"),
         }), encoding="utf-8")
         self.db_path = self.data_dir / "agents.sqlite3"
+        self.report_signing_key_path = self.data_dir / "report-signing-key.pem"
+        report_signing_key = Ed25519PrivateKey.generate()
+        self.report_signing_key_path.write_bytes(report_signing_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        ))
+        self.report_signing_key_path.chmod(0o600)
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
             self.port = listener.getsockname()[1]
@@ -79,6 +87,7 @@ class BrowserJourneyTests(unittest.TestCase):
             "REGISTRATION_TOKEN": REGISTRATION_TOKEN,
             "AGENTS_DB_FILE": str(self.db_path),
             "AGENT_PUBLIC_KEYS_FILE": str(self.registry_path),
+            "REPORT_SIGNING_PRIVATE_KEY_FILE": str(self.report_signing_key_path),
             "API_RATE_LIMIT_MAX_REQUESTS": "60",
         })
         self.server = subprocess.Popen(
@@ -138,44 +147,57 @@ class BrowserJourneyTests(unittest.TestCase):
                 responses["registration"] = response.json()
             elif response.url.endswith("/v1/agents/rotate-key"):
                 responses["rotation"] = response.json()
+            elif response.url.endswith("/v1/score/report/signed"):
+                responses["signed_report"] = response.json()
 
         self.page.on("response", capture_response)
         self.page.on("request", lambda request: transmitted_bodies.append(request.post_data or ""))
         self.page.on("request", lambda request: requested_urls.append(request.url))
         self.page.goto(self.base_url, wait_until="networkidle")
         self.page.get_by_text("Local API connected", exact=True).wait_for()
+
+        # Workspace access powers the real, registration-token-protected directory.
+        self.page.locator("#workspace-token").fill("incorrect-browser-e2e-token")
+        self.page.get_by_role("button", name="Connect").click()
+        self.page.get_by_text("Authentication failed. Check the local token or agent API key.", exact=True).wait_for()
+        self.assertNotIn("Traceback", self.page.locator("body").inner_text())
+        self.page.locator("#workspace-token").fill(REGISTRATION_TOKEN)
+        self.page.get_by_role("button", name="Connect").click()
+        self.page.get_by_text("Workspace connected. The registration token is held in this tab only.", exact=True).wait_for()
+
         self.page.locator("#agent-id").fill(self.agent_id)
         self.page.locator("#private-key").set_input_files(str(self.private_key_path))
-
-        # Verify that a normal user gets a plain error before retrying correctly.
-        self.page.locator("#registration-token").fill("incorrect-browser-e2e-token")
-        self.page.get_by_role("button", name="Run assessment").click()
-        self.page.get_by_role("alert").get_by_text("Authentication failed.").wait_for()
-        self.assertNotIn("Traceback", self.page.locator("#error-box").inner_text())
-
-        self.page.locator("#registration-token").fill(REGISTRATION_TOKEN)
         self.page.get_by_role("button", name="Run assessment").click()
         self.page.wait_for_function(
-            "() => document.getElementById('result-score').textContent === '95'",
+            "() => document.getElementById('detail-score').textContent === '95'",
             timeout=15000,
         )
 
-        self.assertEqual(self.page.locator("#result-rating").inner_text(), "High score")
-        self.assertIn("All 3 evidence checks passed", self.page.locator("#result-summary").inner_text())
-        self.assertIn("not checked against external systems", self.page.locator(".notice").inner_text())
+        self.assertEqual(self.page.locator("#detail-rating").inner_text(), "High score")
+        self.assertIn("All three evidence checks passed", self.page.locator("#detail-summary").inner_text())
+        self.assertIn("not checked against external systems", self.page.locator(".trust-note").inner_text())
         self.assertIn("does not check actual permissions", self.page.locator("#assessment").inner_text())
-        self.assertIn("never receives or verifies audit history", self.page.locator("#assessment").inner_text())
-        self.assertIn("Requester supplied", self.page.locator("#factor-list").inner_text())
-        self.assertIn("Signature verified", self.page.locator("#factor-list").inner_text())
-        self.assertTrue(self.page.get_by_role("button", name="Rotate API key").is_visible())
-        self.assertTrue(self.page.get_by_role("button", name="Save API key for later").is_visible())
-        for route in ("/v1/agents/register", "/v1/identity/challenge", "/v1/identity/verify", "/v1/score", "/v1/score/report"):
+        self.assertIn("does not receive audit history", self.page.locator("#assessment").inner_text())
+        self.assertIn("Requester supplied", self.page.locator("#detail-factors").inner_text())
+        self.assertIn("Signature verified", self.page.locator("#detail-factors").inner_text())
+        self.assertIn(self.agent_id, self.page.locator("#agents-list").inner_text())
+        self.assertIn("95 / 100", self.page.locator("#agents-list").inner_text())
+        self.assertIn("Report", self.page.locator("#detail-report-id").inner_text())
+        self.assertTrue(self.page.get_by_role("button", name="Rotate and revoke old key").is_visible())
+        self.assertTrue(self.page.get_by_role("button", name="Save current API key").is_visible())
+        for route in (
+            "/v1/agents", "/v1/agents/register", "/v1/identity/challenge", "/v1/identity/verify",
+            "/v1/score", "/v1/score/report/signed", "/v1/reports/signing-key", "/v1/agents/",
+        ):
             self.assertTrue(any(route in url for url in requested_urls), f"browser did not request {route}")
 
         registered_key = responses["registration"]["api_key"]
         page_text = self.page.locator("body").inner_text()
         self.assertNotIn(registered_key, page_text)
         self.assertNotIn(REGISTRATION_TOKEN, page_text)
+        signed_report = responses["signed_report"]
+        self.assertEqual(signed_report["report"]["overall_score"], 95)
+        self.assertIn(signed_report["signature"], self.page.locator("#signed-report-json").inner_text())
         private_key_markers = (
             self.private_pem.decode("ascii"),
             base64.b64encode(self.private_pem).decode("ascii"),
@@ -191,9 +213,21 @@ class BrowserJourneyTests(unittest.TestCase):
         })""")
         self.assertEqual(browser_storage, {"local": [], "session": []})
 
+        # Verify a real server-signed report, then prove a modified score is rejected.
+        self.page.get_by_role("button", name="Verify signature").click()
+        self.page.get_by_text("Signature verified · Report signature verified with the local Agent Signal signing key.", exact=False).wait_for()
+        tampered_report = json.loads(self.page.locator("#report-input").input_value())
+        tampered_report["report"]["overall_score"] = 94
+        self.page.locator("#report-input").fill(json.dumps(tampered_report))
+        self.page.get_by_role("button", name="Verify report").click()
+        self.page.get_by_text("Signature invalid", exact=False).wait_for()
+        self.page.locator("#report-input").fill(json.dumps(signed_report))
+        self.page.get_by_role("button", name="Verify report").click()
+        self.page.get_by_text("Signature verified", exact=False).wait_for()
+
         self.page.on("dialog", lambda dialog: dialog.accept())
-        self.page.get_by_role("button", name="Rotate API key").click()
-        self.page.get_by_text("API key rotated. The previous key is revoked immediately.").wait_for()
+        self.page.get_by_role("button", name="Rotate and revoke old key").click()
+        self.page.get_by_text("Old credential revoked (HTTP 401 confirmed). The replacement is active in this tab; save it if you need access later.", exact=True).wait_for()
         rotated_key = responses["rotation"]["api_key"]
         self.assertNotEqual(registered_key, rotated_key)
         self.assertEqual(self._api_status(f"/v1/score?agent_id={self.agent_id}", registered_key), 401)

@@ -43,7 +43,7 @@ Content-Type: application/json
 
 Rotate the bootstrap token by replacing `REGISTRATION_TOKEN` in the local environment file and restarting/recreating the API. The old token then stops authorizing registrations. The API-key rotation route is separate and rotates one registered agent's API key.
 
-All score routes (`GET /v1/score`, `POST /v1/score`, and `POST /v1/score/report`) require the agent's matching `X-API-Key` header. Identity challenge and verify routes also require that agent's API key. Missing, invalid, or another agent's key returns `401`.
+All score routes (`GET /v1/score`, `POST /v1/score`, `POST /v1/score/report`, and `POST /v1/score/report/signed`) require the agent's matching `X-API-Key` header. Identity challenge and verify routes also require that agent's API key. Missing, invalid, or another agent's key returns `401`.
 
 ## Rotate an API key
 
@@ -60,6 +60,35 @@ Content-Type: application/json
 ```json
 {"agent_id":"demo-agent","api_key":"<save the replacement key>"}
 ```
+
+The dashboard uses key rotation to revoke the previous credential. The agent registration remains active under the replacement key; V1 does not delete or disable an agent record.
+
+## Agent directory and saved reports
+
+The local dashboard lists agents with the `X-Registration-Token` because V1 has no separate administrator account. These routes return agent IDs and scores/reports only; they never return API keys or stored key hashes.
+
+- `GET /v1/agents` returns registered IDs, active status, and the latest saved score/rating.
+- `GET /v1/agents/{agent_id}` returns the latest report and, when available, its signed envelope.
+
+The registration token must meet the same strength requirement as registration and shares its rate limit. Latest reports are stored in a `latest_reports` SQLite table. Calling the existing `/score/report` endpoint still returns the same report shape and saves it without a service signature.
+
+## Signed report and verification
+
+`POST /v1/score/report/signed` accepts the same authenticated evidence request as `/v1/score/report`. It returns a report envelope signed with the local service Ed25519 key and persists it with the latest agent report. The agent evidence is still checked exactly as described below; the service signature protects the report contents after calculation. The following is an abbreviated schema illustration; the report field contains the complete existing trust-report object.
+
+```json
+{
+  "report_id": "<unique report ID>",
+  "algorithm": "Ed25519",
+  "signing_key_id": "<SHA-256-derived key ID>",
+  "report": {"agent_id":"demo-agent","overall_score":95,"rating":"high_score"},
+  "signature": "<Base64 service signature over the complete canonical envelope>"
+}
+```
+
+The complete `report` object contains the existing trust report fields. `GET /v1/reports/signing-key` returns the service public key and key ID. `POST /v1/reports/verify` accepts the complete signed envelope and returns `valid: true` or `valid: false`; altered report fields fail verification. Verification uses the current local signing key. Replacing that key makes older signatures unverifiable unless the old public key was separately retained. For independent verification, distribute and pin the public key through a trusted channel; fetching it from the same API does not protect against a compromised API host.
+
+The private service signing key is generated under `.dev/report-signing-key.pem` with owner-only permissions by `prepare-dev.sh`. It never leaves the API host. The browser verifier submits public report data to the local API and does not handle any signing private key.
 
 ## Score and reports
 

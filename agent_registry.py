@@ -8,6 +8,7 @@ import sqlite3
 import threading
 from contextlib import closing
 from pathlib import Path
+from typing import Optional
 
 
 class AgentAlreadyRegistered(Exception):
@@ -34,10 +35,17 @@ class SQLiteAgentStore:
                     agent_id TEXT PRIMARY KEY,
                     key_hash TEXT NOT NULL CHECK(length(key_hash) = 64)
                 )""")
+                connection.execute("""CREATE TABLE IF NOT EXISTS latest_reports (
+                    agent_id TEXT PRIMARY KEY REFERENCES agents(agent_id) ON DELETE CASCADE,
+                    report_json TEXT NOT NULL,
+                    signed_report_json TEXT,
+                    updated_at TEXT NOT NULL
+                )""")
 
     def _connect(self):
         connection = sqlite3.connect(self.path, timeout=5.0, isolation_level="IMMEDIATE")
         connection.execute("PRAGMA busy_timeout = 5000")
+        connection.execute("PRAGMA foreign_keys = ON")
         return connection
 
     def get_hash(self, agent_id: str):
@@ -65,6 +73,55 @@ class SQLiteAgentStore:
 
     def contains(self, agent_id: str) -> bool:
         return self.get_hash(agent_id) is not None
+
+    def list_agents(self) -> list[dict]:
+        with self._lock, closing(self._connect()) as connection:
+            rows = connection.execute("""SELECT agents.agent_id, latest_reports.report_json,
+                    latest_reports.signed_report_json, latest_reports.updated_at
+                FROM agents LEFT JOIN latest_reports ON agents.agent_id = latest_reports.agent_id
+                ORDER BY latest_reports.updated_at IS NULL, latest_reports.updated_at DESC,
+                    agents.agent_id COLLATE NOCASE""").fetchall()
+        return [
+            {
+                "agent_id": row[0],
+                "report": json.loads(row[1]) if row[1] else None,
+                "signed_report": json.loads(row[2]) if row[2] else None,
+                "updated_at": row[3],
+            }
+            for row in rows
+        ]
+
+    def get_agent(self, agent_id: str) -> Optional[dict]:
+        with self._lock, closing(self._connect()) as connection:
+            row = connection.execute("""SELECT agents.agent_id, latest_reports.report_json,
+                    latest_reports.signed_report_json, latest_reports.updated_at
+                FROM agents LEFT JOIN latest_reports ON agents.agent_id = latest_reports.agent_id
+                WHERE agents.agent_id = ?""", (agent_id,)).fetchone()
+        if row is None:
+            return None
+        return {
+            "agent_id": row[0],
+            "report": json.loads(row[1]) if row[1] else None,
+            "signed_report": json.loads(row[2]) if row[2] else None,
+            "updated_at": row[3],
+        }
+
+    def save_report(self, agent_id: str, report: dict, signed_report: Optional[dict] = None) -> None:
+        report_json = json.dumps(report, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        signed_json = (
+            json.dumps(signed_report, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+            if signed_report is not None else None
+        )
+        updated_at = report["checked_at"]
+        with self._lock, closing(self._connect()) as connection:
+            with connection:
+                connection.execute("""INSERT INTO latest_reports(agent_id, report_json, signed_report_json, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(agent_id) DO UPDATE SET
+                        report_json = excluded.report_json,
+                        signed_report_json = excluded.signed_report_json,
+                        updated_at = excluded.updated_at""",
+                    (agent_id, report_json, signed_json, updated_at))
 
     def health_check(self) -> bool:
         try:
@@ -119,6 +176,15 @@ class AgentRegistry:
 
     def contains(self, agent_id: str) -> bool:
         return self.store.contains(agent_id)
+
+    def list_agents(self) -> list[dict]:
+        return self.store.list_agents()
+
+    def get_agent(self, agent_id: str):
+        return self.store.get_agent(agent_id)
+
+    def save_report(self, agent_id: str, report: dict, signed_report: Optional[dict] = None) -> None:
+        self.store.save_report(agent_id, report, signed_report)
 
     def health_check(self) -> bool:
         return self.store.health_check()

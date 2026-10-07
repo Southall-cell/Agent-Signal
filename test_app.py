@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 import agent_registry
 import app as app_module
 import security
+import report_signing
 from app import app
 from rate_limit import PerKeyRateLimiter
 from security import canonical_audit_payload, canonical_permissions_payload
@@ -29,6 +30,15 @@ class TrustAPITests(unittest.TestCase):
         app_module.RATE_LIMITER = PerKeyRateLimiter()
         app_module.REGISTRATION_TOKEN = "test-registration-token-0123456789abcdef"
         self.temporary_directory = tempfile.TemporaryDirectory()
+        self.original_report_signing_key_file = report_signing.SIGNING_KEY_FILE
+        report_signing.SIGNING_KEY_FILE = Path(self.temporary_directory.name) / "report-signing-key.pem"
+        report_private_key = Ed25519PrivateKey.generate()
+        report_signing.SIGNING_KEY_FILE.write_bytes(report_private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        ))
+        report_signing.SIGNING_KEY_FILE.chmod(0o600)
         self.original_registry = agent_registry.REGISTRY
         agent_registry.REGISTRY = agent_registry.AgentRegistry(Path(self.temporary_directory.name) / "agents.sqlite3")
         security.CHALLENGES.clear()
@@ -52,6 +62,7 @@ class TrustAPITests(unittest.TestCase):
         agent_registry.REGISTRY = self.original_registry
         app_module.RATE_LIMITER = self.original_rate_limiter
         app_module.REGISTRATION_TOKEN = self.original_registration_token
+        report_signing.SIGNING_KEY_FILE = self.original_report_signing_key_file
         self.temporary_directory.cleanup()
 
     def signed_manifest(self, actions=None, key=None):
@@ -288,6 +299,56 @@ class TrustAPITests(unittest.TestCase):
             self.assertFalse(report["evidence_results"][name]["valid"])
             self.assertTrue(report["evidence_results"][name]["reason"])
         self.assertEqual(len(report["reasons"]), 3)
+
+    def test_signed_report_verification_registry_listing_and_persistence(self):
+        challenge = self.start_challenge()
+        self.assertEqual(self.verify_challenge(challenge).status_code, 200)
+        evidence = {
+            "agent_id": self.agent_id,
+            "permission_manifest": self.signed_manifest(),
+            "audit_log": self.signed_audit(),
+            "incident_count": 0,
+        }
+        signed_response = self.client.post(
+            "/v1/score/report/signed", json=evidence, headers={"X-API-Key": self.api_key},
+        )
+        self.assertEqual(signed_response.status_code, 200, signed_response.text)
+        envelope = signed_response.json()
+        self.assertEqual(envelope["algorithm"], "Ed25519")
+        self.assertEqual(envelope["report"]["overall_score"], 95)
+
+        verification = self.client.post("/v1/reports/verify", json=envelope)
+        self.assertEqual(verification.status_code, 200)
+        self.assertTrue(verification.json()["valid"])
+        self.assertEqual(verification.json()["report_id"], envelope["report_id"])
+
+        tampered = {**envelope, "report": {**envelope["report"], "overall_score": 94}}
+        invalid = self.client.post("/v1/reports/verify", json=tampered)
+        self.assertEqual(invalid.status_code, 200)
+        self.assertFalse(invalid.json()["valid"])
+        self.assertIn("signature is invalid", invalid.json()["reason"])
+
+        self.assertEqual(self.client.get("/v1/agents").status_code, 401)
+        admin_headers = {"X-Registration-Token": app_module.REGISTRATION_TOKEN}
+        listing = self.client.get("/v1/agents", headers=admin_headers)
+        self.assertEqual(listing.status_code, 200)
+        self.assertEqual(len(listing.json()["agents"]), 1)
+        self.assertEqual(listing.json()["agents"][0]["score"], 95)
+        self.assertEqual(listing.json()["agents"][0]["status"], "active")
+        self.assertNotIn(self.api_key, listing.text)
+        details = self.client.get(f"/v1/agents/{self.agent_id}", headers=admin_headers)
+        self.assertEqual(details.status_code, 200)
+        self.assertEqual(details.json()["signed_report"]["report_id"], envelope["report_id"])
+
+        reloaded = agent_registry.AgentRegistry(Path(self.temporary_directory.name) / "agents.sqlite3")
+        persisted = reloaded.get_agent(self.agent_id)
+        self.assertEqual(persisted["signed_report"]["signature"], envelope["signature"])
+
+        rotated = self.client.post(
+            "/v1/agents/rotate-key", json={"agent_id": self.agent_id}, headers={"X-API-Key": self.api_key},
+        )
+        self.assertEqual(rotated.status_code, 200)
+        self.assertEqual(self.client.get(f"/v1/score?agent_id={self.agent_id}", headers={"X-API-Key": self.api_key}).status_code, 401)
 
     def test_report_clamps_extreme_incident_penalty_and_explains_it(self):
         response = self.client.post("/score/report", json={
@@ -553,7 +614,11 @@ class TrustAPITests(unittest.TestCase):
             report = report_response.json()
             self.assertEqual(report["overall_score"], 95)
             self.assertTrue(report["reasons"])
-            self.assertTrue(all(item["status"] == "verified" for item in report["factor_scores"] if item["factor"] != "incidents"))
+            self.assertTrue(all(
+                item["status"] == "verified"
+                for item in report["factor_scores"]
+                if item["factor"] != "incidents"
+            ))
             fetched = self.client.get(f"/v1/score?agent_id={agent_id}", headers=headers)
             self.assertEqual(fetched.status_code, 200)
             self.assertEqual(fetched.json()["score"], 65)

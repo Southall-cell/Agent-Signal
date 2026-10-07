@@ -11,6 +11,7 @@ fi
 PYTHON_BIN="$VENV_DIR/bin/python" "$ROOT_DIR/prepare-dev.sh"
 export AGENT_PUBLIC_KEYS_FILE="$ROOT_DIR/.dev/agent_public_keys.json"
 export AGENTS_DB_FILE="$ROOT_DIR/.dev/agents.sqlite3"
+export REPORT_SIGNING_PRIVATE_KEY_FILE="$ROOT_DIR/.dev/report-signing-key.pem"
 REGISTRATION_TOKEN=$(sed -n 's/^REGISTRATION_TOKEN=//p' "$ROOT_DIR/.dev/registration.env")
 export REGISTRATION_TOKEN
 PORT=${PORT:-8000}

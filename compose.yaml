@@ -6,6 +6,7 @@ services:
     environment:
       AGENTS_DB_FILE: /data/agents.sqlite3
       AGENT_PUBLIC_KEYS_FILE: /devkeys/agent_public_keys.json
+      REPORT_SIGNING_PRIVATE_KEY_FILE: /devkeys/report-signing-key.pem
       API_RATE_LIMIT_MAX_REQUESTS: "60"
       API_RATE_LIMIT_WINDOW_SECONDS: "60"
     env_file:
@@ -13,6 +14,7 @@ services:
     volumes:
       - ./.dev/agents.sqlite3:/data/agents.sqlite3
       - ./.dev/agent_public_keys.json:/devkeys/agent_public_keys.json:ro
+      - ./.dev/report-signing-key.pem:/devkeys/report-signing-key.pem:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/v1/health', timeout=2)"]
       interval: 5s

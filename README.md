@@ -1,50 +1,53 @@
-# Agent Signal — Local Agent Trust API
+# Agent Signal
 
-A small V1 FastAPI app and browser dashboard for locally scoring submitted agent evidence. It persists agent credentials in SQLite and verifies Ed25519 identity, permissions manifests, and audit digests. It has no hosted dependencies or external runtime services.
+Agent Signal is a local workspace for registering AI agents, scoring submitted evidence, and inspecting signed reports. The browser app uses the existing FastAPI service and SQLite registry; it does not contact hosted services.
 
-## Quick start: install, configure, run, check, stop
+## Start the app
 
-From a clean checkout, run this in the project directory:
+From a fresh checkout, open a terminal in the project directory and run:
 
 ```sh
 ./run-local.sh
 ```
 
-This one command creates `.venv/`, installs the pinned Python requirements, prepares a local registration token and development Ed25519 key pair under `.dev/`, then starts the API on `http://127.0.0.1:8000`. No manual environment configuration is needed for the local demo. Keep this terminal open while the server runs.
+The launcher creates a Python virtual environment, installs the pinned API dependencies, and prepares local development credentials on first run. It then starts the API and web app on loopback.
 
-Open the dashboard at **[http://127.0.0.1:8000/](http://127.0.0.1:8000/)** (or `/dashboard`). This is served by the same local API process; no separate frontend server or browser build step is needed.
+Open **[http://127.0.0.1:8000/](http://127.0.0.1:8000/)** in your browser. Keep the terminal running; press `Ctrl-C` there to stop the app.
 
-### Run a safe demo assessment
+## First browser walkthrough
 
-1. In the dashboard, leave the agent ID as `demo-agent` and select **Register new**. If this agent was already registered, select **Use API key** and paste its saved key instead.
-2. In a second terminal, read the local bootstrap token with `cat .dev/registration.env`. Paste only the value after `REGISTRATION_TOKEN=` into the password field. This file is generated locally with owner-only permissions.
-3. Choose `.dev/demo-agent.pem` in the private-key file picker. The browser reads this key locally to sign the challenge and evidence; the file is not uploaded.
-4. Keep the sample actions, audit note, and incident count, then click **Run assessment**. The page registers/authenticates the agent, verifies an identity challenge, signs the declared actions and audit digest, and requests the score and report from the existing V1 API.
-5. Review the score and evidence explanation. Click **Save API key for later** if you want to authenticate in another tab or after closing this one. The browser holds the key in memory only until then; the downloaded key file is a secret and must be stored securely.
+1. Find the local registration token in a second terminal with `cat .dev/registration.env`. Copy only the value after `REGISTRATION_TOKEN=` and paste it into **Connect this workspace**. The token stays in the browser tab’s memory and is used to list local agents and register new ones.
+2. Choose **New assessment**. Leave the agent ID as `demo-agent` for the included local key, or use another ID whose public key has been added to `.dev/agent_public_keys.json` before starting the API.
+3. Choose **Register new** for a new agent or **Use API key** for an existing one. Select that agent’s Ed25519 private key file. The browser reads it to sign the challenge and evidence; it is never uploaded or saved by the app.
+4. Keep or edit the example action list, audit note, and incident count, then run the assessment. Agent Signal sends the evidence to the API, displays the formula score and evidence reasons, and stores the latest report locally.
+5. Open the agent from **Registered agents** to inspect the score, rating, factors, status, report ID, and complete signed report JSON. **Verify signature** checks the report envelope with the local service’s Ed25519 public key. Edit the JSON in **Verify report** to see altered report content fail verification.
+6. **Rotate and revoke old key** uses the existing API-key rotation route. The page confirms that the old credential now receives HTTP 401 and the replacement works. The agent remains registered. The replacement API key stays in this tab’s memory; choose **Save current API key** if you need it after closing the tab.
 
-The report and “recent assessment” are held in the current page only because the API has no assessment-history endpoint. The dashboard makes no external requests. Its prominent evidence note distinguishes key-backed signature checks from requester-supplied data and states that permissions and history are not externally validated. The **Rotate API key** control revokes the current key immediately; save the replacement key if you rotate it.
+Agent IDs, latest reports, and signed report envelopes are stored in the local SQLite database. Agent API keys are stored there only as hashes. The registration token and development private keys live under `.dev/`, which is ignored by Git and created with owner-only file permissions.
 
-The dashboard requires a modern browser with Web Crypto Ed25519 support. Open it through the local `127.0.0.1` URL so browser cryptography is enabled.
+## What signatures establish
 
-In a second terminal, check readiness:
+- An agent signature verifies that the configured agent key signed the submitted challenge, permissions declaration, or audit digest. It does not independently validate real-world identity, actual permissions, audit history, or the requester-supplied incident count.
+- The report envelope has a separate Ed25519 signature from the local Agent Signal service key. This detects changes to a signed report and identifies the signing key. The browser obtains the public key from the same local service; for independent verification, obtain and pin that public key through a trusted channel.
+- The score is the existing formula output, not a trust certification or independent risk decision.
+
+The service report-signing private key is generated locally as `.dev/report-signing-key.pem`, remains on the API host, and is never returned by an endpoint. Reports created before the signed-report route was used remain viewable but have no service signature; run a new assessment to create a signed envelope.
+
+## Other local commands
+
+Check the health endpoint:
 
 ```sh
 curl -fsS http://127.0.0.1:8000/v1/health
 ```
 
-Health returns `{"status":"ok","api_version":"v1"}`. The command-line example is an alternative complete signed-evidence flow:
+FastAPI’s interactive API docs are at [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs). For a command-line assessment instead of the browser, use `./.venv/bin/python examples/e2e.py` while the API is running.
 
-```sh
-./.venv/bin/python examples/e2e.py
-```
-
-It registers `demo-agent`, verifies a challenge, signs and submits evidence, fetches a report, and saves its API key in `.dev/demo-agent.api-key` with owner-only permissions. The CLI and dashboard share this demo agent: if you run the CLI first, choose **Use API key** in the dashboard and paste that saved key. If you register with the dashboard first, the CLI cannot register the same agent again unless you copy the downloaded key to `.dev/demo-agent.api-key`. Stop the server with `Ctrl-C` in the first terminal.
-
-To change the local port, set `PORT`, for example `PORT=8080 ./run-local.sh`.
+To use a different local port, run `PORT=8080 ./run-local.sh` and open `http://127.0.0.1:8080/`.
 
 ## Docker Compose
 
-Create a virtual environment and the local development credentials, then build and start the API:
+After Docker is installed, prepare the same local files and start the service:
 
 ```sh
 python3 -m venv .venv
@@ -53,15 +56,9 @@ PYTHON_BIN=./.venv/bin/python ./prepare-dev.sh
 docker compose up --build
 ```
 
-The service is published only on `127.0.0.1:8000`. SQLite data and development credentials stay in `.dev/` on the host and are shared with local runs. The container receives the public key file, SQLite database, and local registration token, not the agent private key. Run the example from the host in another terminal:
+Open `http://127.0.0.1:8000/`. Compose binds only to loopback and mounts the SQLite database, public agent keys, registration token, and service report-signing key into the local container. It does not mount the agent’s private key. Stop with `Ctrl-C` or run `docker compose down`; local data stays on disk.
 
-```sh
-./.venv/bin/python examples/e2e.py
-```
-
-Stop the service with `Ctrl-C`. `docker compose down` stops it and keeps local data. To reset the development agent and its saved credential after stopping the service, remove `.dev/agents.sqlite3` and `.dev/demo-agent.api-key`; keep `.dev/agents.sqlite3.legacy-imported` if present so an old JSON backup cannot restore stale keys. `./prepare-dev.sh` recreates the empty database file on the next start.
-
-## Tests
+## Run tests
 
 ```sh
 python3 -m venv .venv
@@ -70,12 +67,6 @@ python3 -m venv .venv
 ./.venv/bin/python -m unittest discover -v
 ```
 
-On a fresh Ubuntu or Debian machine, install Chromium and its operating-system dependencies with:
+On Ubuntu or Debian, install Chromium and its system dependencies with `./.venv/bin/python -m playwright install --with-deps chromium`. The browser test exercises workspace authentication, registration, browser-side challenge and evidence signing, score/report display, valid and tampered report verification, API-key rotation, and rejection of the revoked key. GitHub Actions runs the full suite and repeats the browser journey three times. Local managed sandboxes that prevent Chromium from launching may skip that test; CI is the browser-capable check.
 
-```sh
-./.venv/bin/python -m playwright install --with-deps chromium
-```
-
-The suite includes the Python API/web tests and a real headless Chromium journey. The browser test creates an isolated API and temporary Ed25519 key, checks an authentication error, registers and authenticates through the dashboard, signs the challenge and evidence in the browser, checks the score and explanation, rotates the key, and verifies the old key is rejected. It also checks that private key material is not sent to the API or persisted in browser storage. Playwright and Chromium are test-only dependencies and are not installed by `run-local.sh`. GitHub Actions installs Python, Playwright, Chromium, and Linux browser dependencies, runs the complete suite, then starts the API and waits for its health endpoint before the documented CLI flow. The workflow does not deploy the API. The browser test needs permission to launch a local Chromium process; managed execution sandboxes may report that specific test as skipped, while regular developer machines and CI should run it.
-
-See [API.md](API.md) for routes, request and response examples, authentication, errors, evidence formats, and local security limits. See [RELEASE_READINESS.md](RELEASE_READINESS.md) for scope and assurance limitations.
+See [API.md](API.md) for routes, request/response shapes, authentication, and local security boundaries. See [RELEASE_READINESS.md](RELEASE_READINESS.md) for scope and limitations.

@@ -111,6 +111,48 @@ class TrustReportResponse(APIModel):
     checked_at: str
 
 
+class SignedTrustReport(APIModel):
+    report_id: NonEmptyString
+    algorithm: Literal["Ed25519"]
+    signing_key_id: constr(strict=True, min_length=16, max_length=64)
+    report: TrustReportResponse
+    signature: ManifestSignature
+
+
+class ReportSigningKeyResponse(APIModel):
+    algorithm: Literal["Ed25519"]
+    signing_key_id: str
+    public_key: str
+
+
+class ReportVerificationResponse(APIModel):
+    valid: bool
+    report_id: str
+    agent_id: str
+    signing_key_id: str
+    reason: str
+
+
+class AgentSummary(APIModel):
+    agent_id: str
+    status: Literal["active"]
+    score: Optional[int] = None
+    rating: Optional[Literal["high_score", "review", "low_score"]] = None
+    checked_at: Optional[str] = None
+    report_signed: bool = False
+
+
+class AgentListResponse(APIModel):
+    agents: List[AgentSummary]
+
+
+class AgentDetailsResponse(APIModel):
+    agent_id: str
+    status: Literal["active"]
+    report: Optional[TrustReportResponse] = None
+    signed_report: Optional[SignedTrustReport] = None
+
+
 class ChallengeResponse(APIModel):
     agent_id: str
     challenge_id: str

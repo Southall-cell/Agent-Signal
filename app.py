@@ -3,6 +3,7 @@ import os
 import json
 import hashlib
 import hmac
+import secrets
 from typing import Optional
 
 from fastapi import APIRouter, FastAPI, Header, HTTPException, Query, Request
@@ -16,16 +17,23 @@ from models import (
     AgentKeyRotationResponse,
     AgentRegistrationRequest,
     AgentRegistrationResponse,
+    AgentDetailsResponse,
+    AgentListResponse,
+    AgentSummary,
     ChallengeRequest,
     ChallengeResponse,
     HealthResponse,
+    ReportSigningKeyResponse,
+    ReportVerificationResponse,
     ScoreRequest,
     ScoreResponse,
+    SignedTrustReport,
     TrustReportResponse,
     VerifyIdentityRequest,
     VerifyIdentityResponse,
 )
 from rate_limit import PerKeyRateLimiter
+import report_signing
 from scoring import build_trust_report, score_agent
 from security import (
     PUBLIC_KEYS,
@@ -223,6 +231,44 @@ def rotate_agent_key(
     return AgentKeyRotationResponse(agent_id=request.agent_id, api_key=new_key)
 
 
+@router.get("/agents", response_model=AgentListResponse)
+def list_agents(
+    x_registration_token: Optional[str] = Header(default=None, alias="X-Registration-Token"),
+) -> AgentListResponse:
+    require_registration_token(x_registration_token)
+    agents = []
+    for item in agent_registry.REGISTRY.list_agents():
+        report = item["report"]
+        agents.append(AgentSummary(
+            agent_id=item["agent_id"],
+            status="active",
+            score=report["overall_score"] if report else None,
+            rating=report["rating"] if report else None,
+            checked_at=report["checked_at"] if report else None,
+            report_signed=item["signed_report"] is not None,
+        ))
+    return AgentListResponse(agents=agents)
+
+
+@router.get("/agents/{agent_id}", response_model=AgentDetailsResponse)
+def get_agent_details(
+    agent_id: str,
+    x_registration_token: Optional[str] = Header(default=None, alias="X-Registration-Token"),
+) -> AgentDetailsResponse:
+    require_registration_token(x_registration_token)
+    item = agent_registry.REGISTRY.get_agent(agent_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Agent not found.")
+    report = TrustReportResponse.model_validate(item["report"]) if item["report"] else None
+    signed_report = SignedTrustReport.model_validate(item["signed_report"]) if item["signed_report"] else None
+    return AgentDetailsResponse(
+        agent_id=item["agent_id"],
+        status="active",
+        report=report,
+        signed_report=signed_report,
+    )
+
+
 @router.post("/identity/challenge", response_model=ChallengeResponse)
 def create_identity_challenge(
     request: ChallengeRequest,
@@ -293,7 +339,52 @@ def post_score_report(
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
 ) -> TrustReportResponse:
     require_agent_key(request.agent_id, x_api_key)
-    return build_trust_report(request)
+    report = build_trust_report(request)
+    agent_registry.REGISTRY.save_report(request.agent_id, report.model_dump(mode="json"))
+    return report
+
+
+@router.post("/score/report/signed", response_model=SignedTrustReport)
+def post_signed_score_report(
+    request: ScoreRequest,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+) -> SignedTrustReport:
+    require_agent_key(request.agent_id, x_api_key)
+    report = build_trust_report(request)
+    try:
+        signed_report = report_signing.sign_report(secrets.token_urlsafe(18), report)
+    except report_signing.ReportSigningUnavailable:
+        raise HTTPException(status_code=503, detail="The local report signing key is unavailable.")
+    agent_registry.REGISTRY.save_report(
+        request.agent_id,
+        report.model_dump(mode="json"),
+        signed_report.model_dump(mode="json"),
+    )
+    return signed_report
+
+
+@router.get("/reports/signing-key", response_model=ReportSigningKeyResponse)
+def get_report_signing_key() -> ReportSigningKeyResponse:
+    try:
+        key_id, public_key = report_signing.public_key_info()
+    except report_signing.ReportSigningUnavailable:
+        raise HTTPException(status_code=503, detail="The local report signing key is unavailable.")
+    return ReportSigningKeyResponse(algorithm="Ed25519", signing_key_id=key_id, public_key=public_key)
+
+
+@router.post("/reports/verify", response_model=ReportVerificationResponse)
+def verify_signed_report(envelope: SignedTrustReport) -> ReportVerificationResponse:
+    try:
+        valid, reason = report_signing.verify_report(envelope)
+    except report_signing.ReportSigningUnavailable:
+        raise HTTPException(status_code=503, detail="The local report signing key is unavailable.")
+    return ReportVerificationResponse(
+        valid=valid,
+        report_id=envelope.report_id,
+        agent_id=envelope.report.agent_id,
+        signing_key_id=envelope.signing_key_id,
+        reason=reason,
+    )
 
 
 app.include_router(router, prefix="/v1")
