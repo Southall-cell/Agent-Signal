@@ -23,6 +23,12 @@ jobs:
       - run: python -m pip install -r requirements.txt -r requirements-test.txt
       - run: python -m playwright install --with-deps chromium
       - run: python -m unittest discover -v
+      - name: Repeat browser journey to check stability
+        run: |
+          for attempt in 1 2 3; do
+            echo "Browser journey run ${attempt}/3"
+            python -m unittest -v test_browser_e2e.BrowserJourneyTests.test_real_browser_registration_signed_report_and_revocation
+          done
       - name: Local HTTP smoke and documented example
         shell: bash
         run: |

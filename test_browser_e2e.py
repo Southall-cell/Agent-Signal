@@ -46,18 +46,18 @@ class BrowserJourneyTests(unittest.TestCase):
         self.data_dir = Path(self.temp.name)
         self.agent_id = "browser-demo-agent"
         self.private_key = Ed25519PrivateKey.generate()
-        private_pem = self.private_key.private_bytes(
+        self.private_pem = self.private_key.private_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PrivateFormat.PKCS8,
             encryption_algorithm=serialization.NoEncryption(),
         )
-        private_raw = self.private_key.private_bytes(
+        self.private_raw = self.private_key.private_bytes(
             encoding=serialization.Encoding.Raw,
             format=serialization.PrivateFormat.Raw,
             encryption_algorithm=serialization.NoEncryption(),
         )
         self.private_key_path = self.data_dir / "test-agent.pem"
-        self.private_key_path.write_bytes(private_pem)
+        self.private_key_path.write_bytes(self.private_pem)
         self.private_key_path.chmod(0o600)
         public_bytes = self.private_key.public_key().public_bytes(
             encoding=serialization.Encoding.Raw,
@@ -177,9 +177,9 @@ class BrowserJourneyTests(unittest.TestCase):
         self.assertNotIn(registered_key, page_text)
         self.assertNotIn(REGISTRATION_TOKEN, page_text)
         private_key_markers = (
-            private_pem.decode("ascii"),
-            base64.b64encode(private_pem).decode("ascii"),
-            base64.b64encode(private_raw).decode("ascii"),
+            self.private_pem.decode("ascii"),
+            base64.b64encode(self.private_pem).decode("ascii"),
+            base64.b64encode(self.private_raw).decode("ascii"),
         )
         self.assertFalse(
             any(marker in body for marker in private_key_markers for body in transmitted_bodies),
