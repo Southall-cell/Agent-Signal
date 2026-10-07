@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f7fb">
+  <link rel="icon" href="data:,">
+  <title>Agent Signal — Local evidence scoring</title>
+  <link rel="stylesheet" href="/assets/dashboard.css">
+  <script src="/assets/dashboard.js" defer></script>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <a class="brand" href="/" aria-label="Agent Signal home"><span class="brand-mark">A</span><span>agent<span class="brand-light">signal</span></span></a>
+      <div class="side-label">WORKSPACE</div>
+      <a class="nav-item active" href="#overview"><span class="nav-icon">◫</span> Overview</a>
+      <a class="nav-item" href="#assessment"><span class="nav-icon">＋</span> New assessment</a>
+      <a class="nav-item" href="#recent"><span class="nav-icon">◷</span> Recent assessment</a>
+      <div class="sidebar-bottom">
+        <div class="local-lock"> <span>●</span><div><b>Local workspace</b><small>Data stays on this machine</small></div></div>
+        <a class="side-help" href="/docs" target="_blank" rel="noreferrer">API documentation <span>↗</span></a>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar"><div class="breadcrumb">Workspace <span>/</span> Overview</div><div class="connection"><span class="pulse" id="health-dot"></span><span id="health-label">Checking local API…</span><a href="/docs" target="_blank" rel="noreferrer" aria-label="Open API docs">↗</a></div></header>
+      <div class="content">
+        <section id="overview" class="welcome-row">
+          <div><div class="eyebrow">LOCAL EVIDENCE SCORING</div><h1>Good morning.</h1><p class="lede">A clear view of the evidence behind an agent score.</p></div>
+          <button class="button primary" data-scroll="assessment"><span>＋</span> New assessment</button>
+        </section>
+
+        <section class="notice" aria-label="Important score limitation">
+          <div class="notice-icon">i</div><div><b>A score is a formula result, not a trust certification.</b><p>Signatures can prove control of a configured key and that the key signed submitted data. Permissions, history, and incident counts are not checked against external systems.</p></div>
+        </section>
+
+        <section class="metric-grid" aria-label="Workspace summary">
+          <article class="metric-card"><div class="metric-top"><span>Latest score</span><span class="metric-symbol violet">↗</span></div><div class="metric-value" id="summary-score">—</div><div class="metric-foot" id="summary-rating">No assessment yet</div></article>
+          <article class="metric-card"><div class="metric-top"><span>Evidence checks</span><span class="metric-symbol blue">✓</span></div><div class="metric-value" id="summary-checks">—</div><div class="metric-foot">Cryptographic checks in latest report</div></article>
+          <article class="metric-card"><div class="metric-top"><span>Assessment history</span><span class="metric-symbol mint">◷</span></div><div class="metric-value" id="summary-history">0</div><div class="metric-foot">This tab only · not persisted by the API</div></article>
+        </section>
+
+        <section id="assessment" class="assessment-section">
+          <div class="section-heading"><div><div class="eyebrow">ASSESSMENT FLOW</div><h2>Run an assessment</h2><p>Register or authenticate, verify key control, then score submitted evidence.</p></div><span class="step-pill"><span>1</span> Setup <i>→</i> <span>2</span> Evidence <i>→</i> <span>3</span> Result</span></div>
+
+          <div class="form-layout">
+            <div class="form-column">
+              <article class="panel">
+                <div class="panel-title"><span class="step-number">01</span><div><h3>Agent &amp; access</h3><p>Credentials are sent only to this local API.</p></div></div>
+                <label for="agent-id">Agent ID</label><input id="agent-id" type="text" maxlength="128" value="demo-agent" autocomplete="off">
+                <div class="auth-tabs" role="tablist" aria-label="Authentication method"><button class="auth-tab selected" id="register-tab" type="button">Register new</button><button class="auth-tab" id="existing-tab" type="button">Use API key</button></div>
+                <div id="register-fields"><label for="registration-token">Local registration token</label><input id="registration-token" type="password" autocomplete="off" placeholder="Read from .dev/registration.env"><div class="field-hint">Required once per new agent. Never saved in this browser.</div></div>
+                <div id="existing-fields" hidden><label for="api-key">Agent API key</label><input id="api-key" type="password" autocomplete="off" placeholder="Paste the saved key"><div class="field-hint">Use the key previously saved for this agent.</div></div>
+                <label for="private-key">Agent Ed25519 private key file</label><input id="private-key" type="file" accept=".pem,text/plain"><div class="field-hint">Used locally in this browser to sign the challenge and evidence. The private key is never uploaded.</div>
+              </article>
+
+              <article class="panel">
+                <div class="panel-title"><span class="step-number">02</span><div><h3>Evidence to submit</h3><p>These values are requester supplied. A signature does not validate them externally.</p></div></div>
+                <label for="actions">Declared allowed actions <span class="label-tag">signed by agent key</span></label><textarea id="actions" rows="3">read:profile
+write:notes</textarea><div class="field-hint">One action per line. The API verifies the signature over this list; it does not check actual permissions.</div>
+                <label for="audit-text">Audit note to hash <span class="label-tag">signed digest</span></label><textarea id="audit-text" rows="3">Demo audit event: configuration reviewed locally.</textarea><div class="field-hint">The browser hashes this text and signs the digest. The API never receives or verifies audit history.</div>
+                <label for="incidents">Incident count <span class="label-tag requester">requester supplied</span></label><input id="incidents" type="number" min="0" max="1000000" value="0" step="1"><div class="field-hint">This count is not independently checked.</div>
+              </article>
+              <div class="form-actions"><button class="button primary run-button" id="run-assessment"><span class="button-spinner" id="spinner" hidden></span><span id="run-label">Run assessment</span><span aria-hidden="true">→</span></button><span class="secure-caption"><span>⌑</span> Local API · no third-party services</span></div>
+              <div class="error-box" id="error-box" role="alert" hidden></div>
+            </div>
+
+            <aside class="right-column">
+              <article class="panel flow-panel"><div class="panel-kicker">WHAT HAPPENS</div><div class="flow-item"><span class="flow-icon done">✓</span><div><b>Authenticate</b><small>Registration token or agent API key</small></div></div><div class="flow-item"><span class="flow-icon">2</span><div><b>Verify key control</b><small>One-time Ed25519 challenge</small></div></div><div class="flow-item"><span class="flow-icon">3</span><div><b>Score evidence</b><small>Signed declarations + supplied count</small></div></div><div class="flow-divider"></div><p class="small-muted">The public key for this agent must already be configured in the API. The demo key is created by the local quick start.</p></article>
+              <article class="panel privacy-panel"><div class="privacy-icon">◈</div><h3>Keys stay in your hands</h3><p>The API key stays in this tab’s memory unless you explicitly save it. The private key file is read by the browser only for signing.</p><button id="download-key" class="button subtle" type="button" hidden>Save API key for later</button><div id="key-save-note" class="field-hint" hidden>Saved keys are secrets. Store the downloaded file securely.</div></article>
+            </aside>
+          </div>
+        </section>
+
+        <section id="result" class="result-section" hidden aria-live="polite">
+          <div class="section-heading"><div><div class="eyebrow">ASSESSMENT COMPLETE</div><h2>Score explanation</h2><p id="result-subtitle">Evidence evaluation from the local API.</p></div><button class="button subtle" id="rotate-key" type="button" hidden>Rotate API key</button></div>
+          <div class="result-layout">
+            <article class="score-card"><div class="score-caption">OVERALL SCORE <span>·</span> FORMULA RESULT</div><div class="score-main"><span id="result-score">0</span><small>/ 100</small></div><span class="rating-pill" id="result-rating">review</span><p id="result-summary"></p><div class="score-scale"><span></span><i id="score-marker"></i></div><div class="scale-labels"><span>0 · Low score</span><span>Review</span><span>High score · 100</span></div></article>
+            <article class="panel reasons-panel"><div class="panel-kicker">WHY THIS SCORE</div><div id="reason-list" class="reason-list"></div><div class="result-warning"><b>What this does not mean</b><p>A passed signature check confirms the configured key signed the submitted value. It does not confirm real permissions or that submitted history reflects actual events.</p></div></article>
+          </div>
+          <article class="panel factors-panel"><div class="panel-kicker">EVIDENCE BREAKDOWN</div><div id="factor-list"></div></article>
+          <div class="result-footer"><span id="checked-at"></span><span>Report held in this tab only · the API has no assessment history endpoint</span></div>
+          <div id="rotation-message" class="success-box" hidden></div>
+        </section>
+
+        <section id="recent" class="recent-section"><div class="section-heading compact"><div><div class="eyebrow">SESSION ACTIVITY</div><h2>Recent assessment</h2></div><span class="session-badge">This browser tab</span></div><div id="recent-list" class="empty-state"><div class="empty-art">◴</div><b>No assessment in this tab yet</b><p>Run an assessment to see its score and evidence explanation here.</p></div></section>
+
+        <footer class="footer"><span>Agent Signal <span class="footer-dot">·</span> Local V1</span><span>Score outputs are not independent trust validation.</span></footer>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

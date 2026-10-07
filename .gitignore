@@ -1,0 +1,16 @@
+.dev/
+.venv/
+.env
+__pycache__/
+*.py[cod]
+*.pem
+*.sqlite
+*.sqlite3*
+*.db
+*.api-key
+*.api-key.txt
+.coverage
+coverage.xml
+htmlcov/
+playwright-report/
+test-results/

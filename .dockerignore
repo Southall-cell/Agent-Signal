@@ -1,0 +1,6 @@
+.dev
+.venv
+__pycache__
+*.py[cod]
+agents.sqlite3*
+.git

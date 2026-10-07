@@ -1,0 +1,57 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-test.txt
+      - run: python -m pip install -r requirements.txt -r requirements-test.txt
+      - run: python -m playwright install --with-deps chromium
+      - run: python -m unittest discover -v
+      - name: Local HTTP smoke and documented example
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./prepare-dev.sh
+          export REGISTRATION_TOKEN="$(sed -n 's/^REGISTRATION_TOKEN=//p' .dev/registration.env)"
+          export AGENT_PUBLIC_KEYS_FILE="$PWD/.dev/agent_public_keys.json"
+          export AGENTS_DB_FILE="$PWD/.dev/agents.sqlite3"
+          server_log="$PWD/.dev/ci-server.log"
+          python -m uvicorn app:app --host 127.0.0.1 --port 8765 >"$server_log" 2>&1 &
+          api_pid=$!
+          trap 'kill "$api_pid" 2>/dev/null || true; wait "$api_pid" 2>/dev/null || true' EXIT
+          ready=0
+          for attempt in $(seq 1 30); do
+            if python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/v1/health', timeout=1)" >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            if ! kill -0 "$api_pid" 2>/dev/null; then
+              echo "API process exited before becoming healthy. Server log:" >&2
+              cat "$server_log" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "API did not become healthy within 30 seconds. Server log:" >&2
+            cat "$server_log" >&2
+            exit 1
+          fi
+          python examples/e2e.py --base-url http://127.0.0.1:8765
+          docker compose config -q
